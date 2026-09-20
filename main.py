@@ -1,16 +1,21 @@
 from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from gradio_client import Client, handle_file
-import shutil
-import uuid
 import os
+import uuid
+import shutil
+import traceback
+
 
 app = FastAPI(
     title="Bayan OmniVoice API",
     version="1.0"
 )
 
+
+# اتصال بـ Hugging Face Space
 client = Client("k2-fsa/OmniVoice")
+
 
 OUTPUT_DIR = "outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -20,48 +25,77 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 def home():
     return {
         "status": "online",
-        "engine": "Hugging Face OmniVoice",
-        "service": "Bayan TTS"
+        "engine": "OmniVoice",
+        "app": "Bayan"
     }
 
 
 @app.post("/tts")
-async def text_to_voice(
+async def tts(
     text: str = Form(...),
     voice: UploadFile = File(None)
 ):
 
-    request_id = str(uuid.uuid4())
+    try:
 
-    voice_path = None
+        request_id = str(uuid.uuid4())
 
-    if voice:
-        voice_path = f"{OUTPUT_DIR}/{request_id}_voice.wav"
+        voice_path = None
 
-        with open(voice_path, "wb") as f:
-            shutil.copyfileobj(
-                voice.file,
-                f
+
+        # حفظ الصوت المرجعي
+        if voice:
+
+            voice_path = f"{OUTPUT_DIR}/{request_id}_voice.mp3"
+
+            with open(voice_path, "wb") as f:
+                shutil.copyfileobj(
+                    voice.file,
+                    f
+                )
+
+
+        # استدعاء OmniVoice
+        if voice_path:
+
+            result = client.predict(
+                text,
+                handle_file(voice_path),
+                api_name="/predict"
+            )
+
+        else:
+
+            result = client.predict(
+                text,
+                api_name="/predict"
             )
 
 
-    result = client.predict(
-        text,
-        voice_path if voice_path else None,
-        api_name="/_clone_fn"
-    )
+        output = f"{OUTPUT_DIR}/{request_id}.wav"
 
 
-    output_file = f"{OUTPUT_DIR}/{request_id}.wav"
-
-    shutil.copy(
-        result,
-        output_file
-    )
+        shutil.copy(
+            result,
+            output
+        )
 
 
-    return FileResponse(
-        output_file,
-        media_type="audio/wav",
-        filename="bayan_voice.wav"
-    )
+        return FileResponse(
+            output,
+            media_type="audio/wav",
+            filename="bayan.wav"
+        )
+
+
+    except Exception as e:
+
+        error = traceback.format_exc()
+
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": str(e),
+                "details": error
+            }
+        )
