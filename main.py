@@ -1,6 +1,7 @@
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, Form, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse
-from gradio_client import Client, handle_file
+from omnivoice import OmniVoice
+import torch
 import os
 import uuid
 import shutil
@@ -13,12 +14,16 @@ app = FastAPI(
 )
 
 
-# اتصال بـ Hugging Face Space
-client = Client("k2-fsa/OmniVoice")
-
-
 OUTPUT_DIR = "outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+
+# تحميل النموذج مرة واحدة عند تشغيل السيرفر
+model = OmniVoice.from_pretrained(
+    "k2-fsa/OmniVoice",
+    device_map="cuda:0",
+    dtype=torch.float16
+)
 
 
 @app.get("/")
@@ -33,52 +38,35 @@ def home():
 @app.post("/tts")
 async def tts(
     text: str = Form(...),
-    voice: UploadFile = File(None)
+    voice: UploadFile = File(...),
+    voice_text: str = Form("")
 ):
 
     try:
 
-        request_id = str(uuid.uuid4())
+        uid = str(uuid.uuid4())
 
-        voice_path = None
+        voice_file = f"{OUTPUT_DIR}/{uid}_voice.wav"
 
-
-        # حفظ الصوت المرجعي
-        if voice:
-
-            voice_path = f"{OUTPUT_DIR}/{request_id}_voice.mp3"
-
-            with open(voice_path, "wb") as f:
-                shutil.copyfileobj(
-                    voice.file,
-                    f
-                )
-
-
-        # استدعاء OmniVoice
-        if voice_path:
-
-            result = client.predict(
-                text,
-                handle_file(voice_path),
-                api_name="/predict"
-            )
-
-        else:
-
-            result = client.predict(
-                text,
-                api_name="/predict"
+        with open(voice_file, "wb") as f:
+            shutil.copyfileobj(
+                voice.file,
+                f
             )
 
 
-        output = f"{OUTPUT_DIR}/{request_id}.wav"
-
-
-        shutil.copy(
-            result,
-            output
+        result = model.generate(
+            text=text,
+            ref_audio=voice_file,
+            ref_text=voice_text
         )
+
+
+        output = f"{OUTPUT_DIR}/{uid}.wav"
+
+
+        # حفظ الصوت الناتج
+        result.save(output)
 
 
         return FileResponse(
@@ -90,12 +78,10 @@ async def tts(
 
     except Exception as e:
 
-        error = traceback.format_exc()
-
         return JSONResponse(
             status_code=500,
             content={
                 "error": str(e),
-                "details": error
+                "details": traceback.format_exc()
             }
         )
